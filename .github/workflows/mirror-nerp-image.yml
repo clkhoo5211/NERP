@@ -1,0 +1,51 @@
+name: Mirror NERP image
+
+# Associates ghcr.io/clkhoo5211/nerp with THIS repo (clkhoo5211/NERP), without rebuilding or
+# duplicating any source — the real build stays in the private nexa-complete-v3.1 monorepo's own
+# .github/workflows/nerp-image.yml. GitHub's own Actions token is scoped to the repo it runs in
+# (there is no cross-repo "push as another repo" primitive), so the only way for this repo's own
+# Packages page to show the image is for a workflow that actually runs HERE to push it — this one
+# just relays the already-built content, it never runs `docker build`.
+#
+# One-time setup this workflow depends on (not automatable from here — a GitHub package-settings
+# change, not something an Actions token can grant itself):
+#   ghcr.io/clkhoo5211/nerp -> Package settings -> Manage Actions access -> add clkhoo5211/NERP
+#   with Write access (Write implies pull too, so this one grant covers both steps below).
+#
+# Runs nightly (catches a same-day rebuild in the source repo without any cross-repo notification
+# wiring) and on manual dispatch with an explicit tag. Idempotent either way: pushing identical
+# layers a second time is a cheap no-op at the registry level, not a real re-upload.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to mirror from ghcr.io/clkhoo5211/nerp (e.g. latest, v1.2.0, sha-abc1234)"
+        required: false
+        default: "latest"
+  schedule:
+    - cron: "17 3 * * *" # once a day; arbitrary off-the-hour minute to avoid the top-of-hour GitHub Actions rush
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the source image
+        run: docker pull ghcr.io/clkhoo5211/nerp:${{ inputs.tag || 'latest' }}
+
+      # Re-tag under the identical name and push again — this is what actually makes THIS repo's
+      # own GITHUB_TOKEN the one recorded as having interacted with the package, which is the
+      # signal GitHub's package UI uses to show a "used by" repository. No new tag is invented; the
+      # source repo's own tag (latest, a version, or a sha-<gitsha>) is preserved as-is.
+      - name: Push (mirrors the existing tag under this repo)
+        run: docker push ghcr.io/clkhoo5211/nerp:${{ inputs.tag || 'latest' }}
